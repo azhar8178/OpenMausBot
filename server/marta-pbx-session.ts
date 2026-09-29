@@ -10,7 +10,7 @@ const CONTRACT_VERSION = 1;
 const PENDING_TTL_MS = 5 * 60_000;
 const REQUEST_TIMEOUT_MS = 10_000;
 
-interface MartaIdentity { userId: string; email: string; name: string; role: string }
+interface MartaIdentity { userId: string | number; email: string; name: string; role: string }
 interface MartaBinding {
   ombSessionId: string; botId: string; threadId: string; pbxSessionId: string;
   sessionExpiresAt: number; sessionGrant: string; identity: MartaIdentity;
@@ -59,7 +59,14 @@ function origin(value: string | undefined, requireHttps: boolean): string | null
 function validIdentity(value: unknown): value is MartaIdentity {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const row = value as Record<string, unknown>;
-  return ["userId", "email", "name", "role"].every((key) => typeof row[key] === "string");
+  return (typeof row.userId === "string" || typeof row.userId === "number") &&
+    ["email", "name", "role"].every((key) => typeof row[key] === "string");
+}
+function expiryMs(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value !== "string") return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 function equalSecret(a: string, b: string): boolean {
   const left = Buffer.from(a), right = Buffer.from(b);
@@ -175,15 +182,16 @@ export class MartaPbxSessionManager {
       contractVersion: CONTRACT_VERSION, code, verifier: pending.verifier,
       botId: pending.botId, threadId: pending.threadId,
     });
+    const sessionExpiresAt = expiryMs(payload.sessionExpiresAt);
     if (!validIdentity(payload.identity) || typeof payload.sessionId !== "string" ||
-        typeof payload.sessionExpiresAt !== "number" || typeof payload.sessionGrant !== "string") {
+        sessionExpiresAt === null || typeof payload.sessionGrant !== "string") {
       throw Object.assign(new Error("PBX returned an invalid Marta session"), { status: 502 });
     }
     this.bindings = this.bindings.filter((row) =>
       !(row.ombSessionId === ombSessionId && row.botId === pending.botId && row.threadId === pending.threadId));
     this.bindings.push({
       ombSessionId, botId: pending.botId, threadId: pending.threadId,
-      pbxSessionId: payload.sessionId, sessionExpiresAt: payload.sessionExpiresAt,
+      pbxSessionId: payload.sessionId, sessionExpiresAt,
       sessionGrant: payload.sessionGrant, identity: payload.identity,
     });
     this.persist();
@@ -248,13 +256,14 @@ export class MartaPbxSessionManager {
     const payload = await this.post("/api/marta/v1/session/check", {
       contractVersion: CONTRACT_VERSION, sessionGrant: binding.sessionGrant, botId, threadId,
     });
+    const sessionExpiresAt = expiryMs(payload.sessionExpiresAt);
     if (!validIdentity(payload.identity) || typeof payload.actorGrant !== "string" ||
-        typeof payload.sessionId !== "string" || typeof payload.sessionExpiresAt !== "number" ||
+        typeof payload.sessionId !== "string" || sessionExpiresAt === null ||
         !equalSecret(payload.sessionId, binding.pbxSessionId)) {
       throw Object.assign(new Error("PBX rejected or changed the Marta session"), { status: 401 });
     }
     binding.identity = payload.identity;
-    binding.sessionExpiresAt = payload.sessionExpiresAt;
+    binding.sessionExpiresAt = sessionExpiresAt;
     this.persist();
     const clone: StdioMcpSpec = {
       command: server.command, args: [...server.args],
