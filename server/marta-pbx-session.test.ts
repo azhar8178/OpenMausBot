@@ -42,7 +42,7 @@ describe("Marta PBX session manager", () => {
       calls.push({ url: String(input), body: JSON.parse(String(init?.body)) });
       return response({
         identity: { userId: "7", email: "agent@example.test", name: "Agent", role: "marta_reader" },
-        sessionId: "pbx-session", sessionExpiresAt: 1_800_000_600_000,
+        sessionId: "pbx-session", sessionExpiresAt: "2027-01-15T08:10:00.000Z",
         sessionGrant: "session-grant", actorGrant: "actor-grant",
       });
     }) as unknown as typeof fetch;
@@ -71,9 +71,9 @@ describe("Marta PBX session manager", () => {
       const path = new URL(String(input)).pathname;
       return path.endsWith("/handoff/consume")
         ? response({ identity: { userId: "7", email: "agent@example.test", name: "Agent", role: "reader" },
-            sessionId: "pbx-session", sessionExpiresAt: 1_800_000_600_000, sessionGrant: "session-grant" })
+            sessionId: "pbx-session", sessionExpiresAt: "2027-01-15T08:10:00.000Z", sessionGrant: "session-grant" })
         : response({ identity: { userId: "7", email: "agent@example.test", name: "Agent", role: "reader" },
-            sessionId: "pbx-session", sessionExpiresAt: 1_800_000_600_000, actorGrant: "turn-only" });
+            sessionId: "pbx-session", sessionExpiresAt: "2027-01-15T08:10:00.000Z", actorGrant: "turn-only" });
     }) as unknown as typeof fetch;
     const { manager } = fixture(fetchImpl);
     const start = new URL(manager.start("omb-a", "marta", "thread-a"));
@@ -95,9 +95,9 @@ describe("Marta PBX session manager", () => {
       const path = new URL(String(input)).pathname;
       return path.endsWith("/handoff/consume")
         ? response({ identity: { userId: "7", email: "a@b.test", name: "A", role: "reader" },
-            sessionId: "pbx-session", sessionExpiresAt: 1_800_000_600_000, sessionGrant: "session-grant" })
+            sessionId: "pbx-session", sessionExpiresAt: "2027-01-15T08:10:00.000Z", sessionGrant: "session-grant" })
         : response({ identity: { userId: "7", email: "a@b.test", name: "A", role: "reader" },
-            sessionId: "pbx-session", sessionExpiresAt: 1_800_000_600_000, actorGrant: "turn-only" });
+            sessionId: "pbx-session", sessionExpiresAt: "2027-01-15T08:10:00.000Z", actorGrant: "turn-only" });
     }) as unknown as typeof fetch;
     const { manager } = fixture(fetchImpl);
     const start = new URL(manager.start("omb-a", "marta", "thread-a"));
@@ -121,7 +121,7 @@ describe("Marta PBX session manager", () => {
       const path = new URL(String(input)).pathname;
       if (path.endsWith("/handoff/consume")) return response({
         identity: { userId: "7", email: "a@b.test", name: "A", role: "reader" },
-        sessionId: "pbx-session", sessionExpiresAt: 1_800_000_600_000, sessionGrant: "session-grant",
+        sessionId: "pbx-session", sessionExpiresAt: "2027-01-15T08:10:00.000Z", sessionGrant: "session-grant",
       });
       if (path.endsWith("/session/revoke")) revoked = true;
       return response({ ok: true });
