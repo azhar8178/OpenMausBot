@@ -21,6 +21,7 @@ import { ConfirmDialog } from "../ConfirmDialog";
 import { LocalComputerAutoWarning } from "../LocalComputerAutoWarning";
 import { Switch } from "../SettingsPrimitives";
 import { ProposalStatus } from "./ProposalStatus";
+import { MartaConnectionCard } from "./MartaConnectionCard";
 import { preloadConnectedApps, type ConnectorInventory } from "../PluginsPanel";
 import {
   classifyConnectorTool,
@@ -556,6 +557,7 @@ export function AccessSection({
 
   return (
     <div className="flex flex-col gap-4">
+      {!draft && <MartaConnectionCard botId={bot.id} threadId={bot.threadId} />}
       <div className="rounded-xl bg-card p-4">
         <div className="text-[15px] font-medium text-ink">Works on</div>
         <div className="mt-0.5 text-[13px] text-ink-secondary">
