@@ -46,7 +46,9 @@ export function MartaConnectionCard({ botId, threadId }: { botId: string; thread
         <div className="min-w-0">
           <div className="text-[15px] font-medium text-ink">PBX identity</div>
           <div className="mt-0.5 text-[13px] text-ink-secondary">
-            {status?.connected
+            {status?.configured === false
+              ? "PBX identity is not fully configured on this Marta server."
+              : status?.connected
               ? `Connected as ${status.identity?.name || status.identity?.email || "PBX user"} for this thread.`
               : "Connect your PBX account before Marta can read approved business data in this thread."}
           </div>
@@ -58,7 +60,7 @@ export function MartaConnectionCard({ botId, threadId }: { botId: string; thread
           )}
           {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}
         </div>
-        <button type="button" disabled={busy} onClick={status?.connected ? disconnect : connect}
+        <button type="button" disabled={busy || status?.configured === false} onClick={status?.connected ? disconnect : connect}
           className="shrink-0 rounded-lg bg-control px-3 py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50">
           {busy ? "Working…" : status?.connected ? "Disconnect" : "Connect PBX"}
         </button>

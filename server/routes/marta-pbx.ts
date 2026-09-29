@@ -19,6 +19,10 @@ export function createMartaPbxRoutes(deps: MartaPbxRouteDeps): RouteHandler {
     if (path === "/api/auth/pbx/status" && method === "GET") {
       const botId = field(url, "botId", 128), threadId = field(url, "threadId", 128);
       res.setHeader("cache-control", "no-store");
+      // Desktop-owner loopback sessions do not have a durable OpenMaus
+      // session id to bind. Keep the card absent instead of surfacing an
+      // authentication error on every non-hosted bot settings screen.
+      if (auth.kind !== "session") return json(res, 200, { applicable: false });
       return json(res, 200, deps.manager.status(sessionId(auth), botId, threadId));
     }
     if (path === "/api/auth/pbx/start" && method === "GET") {
