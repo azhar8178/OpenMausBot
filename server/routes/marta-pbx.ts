@@ -15,7 +15,7 @@ function field(url: URL, name: string, max: number): string {
   return value;
 }
 export function createMartaPbxRoutes(deps: MartaPbxRouteDeps): RouteHandler {
-  return async ({ res, url, path, method, auth, json, readBody }) => {
+  return async ({ req, res, url, path, method, auth, json, readBody }) => {
     if (path === "/api/auth/pbx/status" && method === "GET") {
       const botId = field(url, "botId", 128), threadId = field(url, "threadId", 128);
       res.setHeader("cache-control", "no-store");
@@ -33,7 +33,7 @@ export function createMartaPbxRoutes(deps: MartaPbxRouteDeps): RouteHandler {
       res.statusCode = 303; res.setHeader("cache-control", "no-store"); res.setHeader("location", next); res.end(); return;
     }
     if (path === "/api/auth/pbx/disconnect" && method === "POST") {
-      const body = await readBody();
+      const body = await readBody(req);
       if (!body || typeof body !== "object" || Array.isArray(body) ||
           typeof body.botId !== "string" || typeof body.threadId !== "string") {
         return json(res, 400, { error: "botId and threadId are required" });

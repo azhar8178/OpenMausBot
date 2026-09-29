@@ -71,6 +71,7 @@ export class MartaPbxSessionManager {
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => number;
   private readonly config: Configuration | null;
+  private readonly targetBotId: string | null;
   private bindings: MartaBinding[] = [];
   private readonly pending = new Map<string, PendingHandoff>();
 
@@ -82,6 +83,7 @@ export class MartaPbxSessionManager {
     const publicOrigin = origin(env.OMB_MARTA_PBX_PUBLIC_URL, true);
     const internalOrigin = origin(env.OMB_MARTA_PBX_INTERNAL_URL, false);
     const botId = env.OMB_MARTA_BOT_ID?.trim() ?? "";
+    this.targetBotId = /^[\w-]+$/.test(botId) ? botId : null;
     const mcpServer = env.OMB_MARTA_MCP_SERVER?.trim() || "marta-readonly";
     const handoffToken = env.MARTA_HANDOFF_TOKEN ?? "";
     this.config = publicOrigin && internalOrigin && /^[\w-]+$/.test(botId) &&
@@ -95,7 +97,7 @@ export class MartaPbxSessionManager {
 
   configured(): boolean { return this.config !== null; }
   isMartaBot(botId: string): boolean {
-    return Boolean(this.config && equalSecret(botId, this.config.botId));
+    return Boolean(this.targetBotId && equalSecret(botId, this.targetBotId));
   }
 
   private load(): void {
@@ -134,7 +136,8 @@ export class MartaPbxSessionManager {
   }
 
   status(ombSessionId: string, botId: string, threadId: string): Record<string, unknown> {
-    if (!this.config || !this.isMartaBot(botId)) return { applicable: false };
+    if (!this.isMartaBot(botId)) return { applicable: false };
+    if (!this.config) return { applicable: true, configured: false, connected: false, threadId };
     const binding = this.binding(ombSessionId, botId, threadId);
     return binding
       ? { applicable: true, configured: true, connected: true, identity: binding.identity,
