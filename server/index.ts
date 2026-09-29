@@ -19461,7 +19461,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             botId: currentAtStart.id,
             threadId,
             guarded,
-            busy: currentAtStart.busy,
+            busy: Boolean(currentAtStart.busy),
             bot: currentAtStart,
             approvalMode: approvalModeFor(currentAtStart),
           });
