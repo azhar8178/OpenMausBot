@@ -553,6 +553,8 @@ import { ROUTES, dispatchRoutes } from "./routes/table.ts";
 import { createHostedSlackRoutes } from "./routes/hosted-slack.ts";
 import { createBotPresetRoutes } from "./routes/bot-presets.ts";
 import { createBotMemoryRoutes } from "./routes/bot-memory.ts";
+import { MartaPbxSessionManager } from "./marta-pbx-session.ts";
+import { createMartaPbxRoutes } from "./routes/marta-pbx.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
 const WEBHOOK_PORT = Number(process.env.OMB_WEBHOOK_PORT || PORT + 1);
@@ -614,6 +616,12 @@ const sessions = new SessionRegistry({
     return (email) => allowedScopes(email, membership);
   },
   portalMembership: hostedWorkspaceConfiguration()?.portalMembership === true,
+});
+const martaPbx = new MartaPbxSessionManager({
+  file: join(DATA_DIR, "marta-pbx-sessions.json"),
+});
+sessions.onSessionRevoked((id) => {
+  void martaPbx.revokeForOmbSession(id);
 });
 const sharedComputers = new SharedComputers(id => sessions.isLive(id));
 // OMB Cloud Pro home machine (server/cloud-home.ts, docs/cloud-pro.md). A
@@ -7680,7 +7688,7 @@ function drainAsideLane() {
 
 /** Keep a person's words off the transcript until a direct-thread slot is
  * available. Reuse the existing cancellable, idempotent composer queue. */
-async function startOrQueueDirectMessage(botId: string, threadId: string, text: string, replyTo?: Message, sendId?: string, sender?: ResolvedSender, trigger?: UsageTrigger) {
+async function startOrQueueDirectMessage(botId: string, threadId: string, text: string, replyTo?: Message, sendId?: string, sender?: ResolvedSender, trigger?: UsageTrigger, martaSessionId?: string) {
   const decision = admit("direct", {}, {
     // A room turn holds the bot exactly like the sibling opened-thread queue
     // below: the drain's own block check waits it out, so the words queue
@@ -7691,6 +7699,9 @@ async function startOrQueueDirectMessage(botId: string, threadId: string, text: 
     parksBehindCoordination: parksBehindCoordination(botId, threadId),
   });
   if (decision.action === "queue") {
+    if (martaSessionId) {
+      throw Object.assign(new Error("Marta does not queue messages; wait for a free direct thread slot"), { status: 409 });
+    }
     const queued = queueSteeredMessage(botId, threadId, text, {
       replyToId: replyTo?.id,
       sendId,
@@ -7701,7 +7712,7 @@ async function startOrQueueDirectMessage(botId: string, threadId: string, text: 
     });
     return { ok: true as const, queued: true as const, queueId: queued.id, threadId, reason: decision.reason };
   }
-  const message = await startTurn(botId, text, { threadId, replyTo, sendId, sender, trigger });
+  const message = await startTurn(botId, text, { threadId, replyTo, sendId, sender, trigger, martaSessionId });
   return { ok: true as const, threadId, message };
 }
 
@@ -7986,6 +7997,8 @@ async function startTurn(
     /** Queue receipts outlive the dispatch acknowledgment until this exact turn settles. */
     onTurnSettled?: () => void;
     coordination?: { id: string; resumed: boolean; settle: (outcome: { ok: boolean; text: string }) => void };
+    /** Authenticated OpenMaus session that owns a Marta/PBX thread binding. */
+    martaSessionId?: string;
   },
 ) {
   workspaceMaintenance.assertAvailable();
@@ -8007,6 +8020,14 @@ async function startTurn(
   }
   const bot = store.projectBotForTask(botId, threadId);
   if (!bot) throw Object.assign(new Error("no such task"), { status: 404 });
+  const martaTurn = martaPbx.assertTurn({
+    ombSessionId: opts?.martaSessionId,
+    botId: bot.id,
+    threadId,
+    bot,
+    approvalMode: approvalModeFor(bot),
+    options: opts,
+  });
   // Routines and legacy peer delivery already have their own completion
   // owners. Only ordinary chats opt into this scheduler; its child turns
   // carry an exact node id rather than inheriting a routine's lifetime.
@@ -8163,7 +8184,7 @@ async function startTurn(
     }
   }
 
-  const agentsMounted = (commsDepth < MAX_COMMS_DEPTH || Boolean(opts?.coordination)) && instance.adapter.capabilities.agentsMcp === true;
+  const agentsMounted = !martaTurn && (commsDepth < MAX_COMMS_DEPTH || Boolean(opts?.coordination)) && instance.adapter.capabilities.agentsMcp === true;
 
   // busy flips immediately so the composer locks; the dispatch itself runs
   // in the background — boat provisioning can take ~90s and must never
@@ -8388,7 +8409,7 @@ async function startTurn(
 
       const integrations: NonNullable<Parameters<typeof instance.adapter.sendTurn>[0]["integrations"]> = {};
       let browser: Awaited<ReturnType<typeof browserIntegration>> = null;
-      const selectedSkills = selectBundledSkills(
+      const selectedSkills = martaTurn ? [] : selectBundledSkills(
         providerText,
         [
           ...(instance.adapter.capabilities.phoneMcp === true ? ["phoneMcp"] : []),
@@ -8396,14 +8417,14 @@ async function startTurn(
         ],
         availableSkills(),
       );
-      if (selectedSkills.some((skill) => skill.manifest.requiredCapabilities.includes("phoneMcp"))) {
+      if (!martaTurn && selectedSkills.some((skill) => skill.manifest.requiredCapabilities.includes("phoneMcp"))) {
         integrations.phone = phoneIntegration(bot.id, threadId, dispatchClaimId);
       }
       // the user's connected apps, but only to a driver that can mount
       // them — a key in the config says the connections exist, not that
       // this engine can reach them — and only to a bot the user has not
       // switched off: the key is workspace-wide, the grant is per bot.
-      if (bot.composio !== false && composio.configured(cfg) && instance.adapter.capabilities.composioMcp === true) {
+      if (!martaTurn && bot.composio !== false && composio.configured(cfg) && instance.adapter.capabilities.composioMcp === true) {
         const connection = await connectedAppsIntegration(bot, threadId, dispatchClaimId);
         if (connection) integrations.composio = connection;
       }
@@ -8412,7 +8433,11 @@ async function startTurn(
       // never pre-allowed, so every call rides the normal permission flow.
       if (instance.adapter.capabilities.customMcp === true) {
         const custom = engineMcpServers(bot);
-        if (Object.keys(custom).length) integrations.custom = custom;
+        if (martaTurn) {
+          integrations.custom = await martaPbx.actorMcp(opts!.martaSessionId!, bot.id, threadId, custom);
+        } else if (Object.keys(custom).length) {
+          integrations.custom = custom;
+        }
       }
       // CLI engines work inside the bot's own workspace directory rather
       // than the user's home: a bot with file tools and acceptEdits gets a
@@ -8453,7 +8478,7 @@ async function startTurn(
       // dweb is opt-in: without an explicit daemon URL, do not advertise
       // tools that would fail on every call or spawn an unnecessary proxy.
       const dwebUrl = process.env.DWEB_URL?.trim();
-      if (dwebUrl) integrations.dweb = { url: dwebUrl };
+      if (!martaTurn && dwebUrl) integrations.dweb = { url: dwebUrl };
       // Cloud routines always use Boat/BoatAgent. The per-bot backend applies
       // only to ordinary turns that mount a computer into the local agent.
       const teamComputer = inheritedTeamComputer(bot);
@@ -8884,7 +8909,7 @@ async function startTurn(
         const ownThreadCreation = boundedCoordination && !opts?.coordination && Boolean(origin && !origin.peerAsk);
         integrations.agents = agentsIntegration(bot.id, threadId, commsDepth, skillAuthoring, dispatchClaimId, opts?.coordination?.id, boundedCoordination, ownThreadCreation);
       }
-      if (instance.adapter.capabilities.hooks === true && hooksEnabled()) {
+      if (!martaTurn && instance.adapter.capabilities.hooks === true && hooksEnabled()) {
         integrations.hooks = hooksIntegration(bot.id, threadId, dispatchClaimId);
       }
       // @mentions in the user's message (the composer's tagging UI) become
@@ -13587,6 +13612,7 @@ const workspaceBackupRoutes = createWorkspaceBackupRoutes({
 // Route modules (server/routes/README.md). `workspaceAccess` is assigned at
 // boot, after this line, so the dependency reads it per request.
 ROUTES.push(createHostedSlackRoutes({ bot: (id) => store.bot(id), hostedReady: () => Boolean(workspaceAccess) && entitled("admin") }));
+ROUTES.push(createMartaPbxRoutes({ manager: martaPbx, bot: (id) => store.bot(id) }));
 // Install statuses come from the organization library's own state, never
 // its file, so New bot cannot disagree with it. No organization: none.
 const orgInstallStatuses = () => orgLibrary?.installStatuses() ?? new Map();
@@ -19427,6 +19453,18 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 
           const currentAtStart = store.projectBotForTask(bot.id, threadId);
           if (!currentAtStart) throw Object.assign(new Error("no such bot"), { status: 404 });
+          const martaSessionId = martaPbx.isMartaBot(currentAtStart.id) && auth.kind === "session"
+            ? auth.session.id
+            : undefined;
+          martaPbx.assertMessageAdmission({
+            ombSessionId: martaSessionId,
+            botId: currentAtStart.id,
+            threadId,
+            guarded,
+            busy: Boolean(currentAtStart.busy),
+            bot: currentAtStart,
+            approvalMode: approvalModeFor(currentAtStart),
+          });
           if (!store.taskByThread(currentAtStart.id, threadId)) {
             throw Object.assign(new Error("the target task no longer exists"), { status: 409 });
           }
@@ -19453,7 +19491,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             if (guardedAdmission.action === "refuse") {
               throw Object.assign(new Error("wait for a free thread slot before retrying this message"), { status: 409, code: "guarded_busy" });
             }
-            const message = await startTurn(bot.id, text, { threadId, replyTo, sendId, sender: messageSender(auth), trigger });
+            const message = await startTurn(bot.id, text, { threadId, replyTo, sendId, sender: messageSender(auth), trigger, martaSessionId });
             return { ok: true as const, threadId, message };
           }
 
@@ -19526,7 +19564,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
               return { ok: true as const, steered: true as const, threadId, message };
             }
             if (!current.busy) {
-              return startOrQueueDirectMessage(bot.id, threadId, text, replyTo, sendId, messageSender(auth), trigger);
+              return startOrQueueDirectMessage(bot.id, threadId, text, replyTo, sendId, messageSender(auth), trigger, martaSessionId);
             }
             const queued = queueSteeredMessage(current.id, threadId, text, {
               replyToId: replyTo?.id,
@@ -19537,7 +19575,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             });
             return { ok: true as const, queued: true as const, queueId: queued.id, threadId };
           }
-          return startOrQueueDirectMessage(bot.id, threadId, text, replyTo, sendId, messageSender(auth), trigger);
+          return startOrQueueDirectMessage(bot.id, threadId, text, replyTo, sendId, messageSender(auth), trigger, martaSessionId);
         },
       );
       return json(res, 202, receipt);

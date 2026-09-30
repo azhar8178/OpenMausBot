@@ -281,6 +281,10 @@ export const CLIENT_ALLOW: ReadonlyArray<{ methods: readonly string[]; path: Reg
   { methods: ["GET"], path: /^\/api\/auth\/session$/ },
   { methods: ["POST"], path: /^\/api\/auth\/stream-ticket$/ },
   { methods: ["POST"], path: /^\/api\/auth\/logout$/ },
+  // Marta PBX identity handoff. The route binds every action to this
+  // authenticated OpenMaus session and never returns a PBX grant.
+  { methods: ["GET"], path: /^\/api\/auth\/pbx\/(?:start|callback|status)$/ },
+  { methods: ["POST"], path: /^\/api\/auth\/pbx\/disconnect$/ },
   // Own outbound desktop connector, additionally bound to a private secret.
   // Only honoured while features.sharedComputers is on (see requiredScope):
   // with the feature off these paths are as unlisted as any other, so a

@@ -932,6 +932,12 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         const mcpTool = isLegacyMcpPermission
           ? String(params.message ?? "").match(/tool "([^"]+)"/)?.[1]
           : undefined;
+        const martaAllowKey =
+          isLegacyMcpPermission &&
+          params.serverName === "marta-readonly" &&
+          ["marta_status", "search_purchase_orders", "search_vendor_messages", "get_customer_context"].includes(mcpTool ?? "")
+            ? `mcp:marta-readonly:${mcpTool}`
+            : undefined;
         const tool =
           mcpAppApproval
             ? mcpAppApproval.tool
@@ -952,7 +958,13 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             : isAdditionalPermission
               ? { permissions: allow ? grantedPermissions(params.permissions) : {}, scope: "turn" }
               : { decision: allow ? (legacy ? "approved" : "accept") : legacy ? "denied" : "decline" };
-        if (autoAcceptPermissions && isPermission) {
+        const autoApproveMartaReadOnly = ["1", "true", "yes"].includes(
+          (process.env.OMB_MARTA_READONLY_AUTO_APPROVE ?? "").trim().toLowerCase(),
+        );
+        if (
+          (autoAcceptPermissions || (autoApproveMartaReadOnly && Boolean(martaAllowKey))) &&
+          isPermission
+        ) {
           return send({
             jsonrpc: "2.0",
             id: msg.id,
@@ -1023,6 +1035,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           requestType: isQuestion ? "question" : "permission",
           tool,
           summary,
+          ...(martaAllowKey ? { allowKey: martaAllowKey } : {}),
           command: method === "execCommandApproval" || method === "item/commandExecution/requestApproval"
             ? permissionCommand(params.command, params.cwd ?? (
               // Helpers may have a different workspace from their parent.
